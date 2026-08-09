@@ -1,474 +1,381 @@
-import { useState, useEffect } from "react";
+import { lazy, Suspense } from "react";
 import {
-  Activity, AlertTriangle, Car, CheckCircle2, Circle, Clock, Cpu,
-  Gauge, Power, Radio, RotateCcw, Settings, TrafficCone, Zap, Wifi,
-  Timer, BarChart3, TrendingUp, ChevronRight, ArrowUpDown, ScanLine
+  Activity,
+  AlertTriangle,
+  ArrowDownUp,
+  Car,
+  CheckCircle2,
+  CircleGauge,
+  Clock3,
+  Cpu,
+  Lightbulb,
+  Radio,
+  ShieldCheck,
+  Wifi,
+  WifiOff,
 } from "lucide-react";
-import {
-  LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid,
-  Tooltip, ResponsiveContainer
-} from "recharts";
 
-// ---------------------------------------------------------------------------
-// Design tokens
-// bg        #0a0e16   near-black navy
-// surface   #10151f   card surface
-// surface-2 #161d2b   raised surface (LCD, decision card)
-// line      #1f2937   hairline border
-// blue      #3b82f6   primary accent
-// cyan      #22d3ee   secondary accent / signature glow
-// green     #22c55e   go / active / completed
-// amber     #f59e0b   wait / yellow phase
-// red       #ef4444   stop / alert
-// text hi   #e5edf7
-// text lo   #7c8aa0
-// display font: "Inter" (system stack) | mono: "JetBrains Mono", monospace
-// Signature: radar-scan intersection panel with a rotating sweep + sensor
-// pulses, echoing an actual traffic-ops control room screen.
-// ---------------------------------------------------------------------------
+import { useSmartUturnTelemetry } from "./useSmartUturnTelemetry";
 
-const vehicleCountSeries = [
-  { t: "08:00", vehicles: 22 }, { t: "08:05", vehicles: 28 },
-  { t: "08:10", vehicles: 31 }, { t: "08:15", vehicles: 26 },
-  { t: "08:20", vehicles: 35 }, { t: "08:25", vehicles: 42 },
-  { t: "08:30", vehicles: 38 }, { t: "08:35", vehicles: 45 },
-  { t: "08:40", vehicles: 40 }, { t: "08:45", vehicles: 33 },
+const QueueHistoryChart = lazy(() => import("./QueueHistoryChart"));
+
+const FSM_STEPS = [
+  "MAIN_GREEN",
+  "REQUEST_VALIDATION",
+  "MAIN_YELLOW",
+  "PRE_UTURN_ALL_RED",
+  "UTURN_GO",
+  "POST_UTURN_ALL_RED",
 ];
 
-const densitySeries = [
-  { lane: "Through N", density: 62 }, { lane: "Through S", density: 48 },
-  { lane: "U-Turn", density: 71 }, { lane: "Conflict Z", density: 35 },
-];
+const SENSOR_THRESHOLDS = { u1: 350, u2: 300 };
 
-const sensors = [
-  { id: "CdS-U1", label: "U-Turn Entry Photocell", value: "812 lux", status: "active" },
-  { id: "CdS-U2", label: "U-Turn Demand Photocell", value: "18 evt/min", status: "active" },
-  { id: "CdS-T1", label: "Through Lane Photocell", value: "7 evt/min", status: "active" },
-  { id: "Ultrasonic C1", label: "Conflict Zone Clearance", value: "412 cm", status: "idle" },
-  { id: "Ultrasonic C2", label: "Movement Monitor", value: "—", status: "idle" },
-];
+const LABELS = {
+  MAIN_GREEN: "Main green",
+  REQUEST_VALIDATION: "Request validation",
+  MAIN_YELLOW: "Main yellow",
+  PRE_UTURN_ALL_RED: "Pre U-turn all-red",
+  UTURN_GO: "U-turn go",
+  POST_UTURN_ALL_RED: "Post U-turn all-red",
+  FAULT_SAFE: "Fault safe",
+  NO_DEMAND: "No demand",
+  PASSING_EVENT: "Passing event",
+  UTURN_REQUEST: "U-turn request",
+  UTURN_QUEUE: "U-turn queue",
+  POCKET_FULL: "Pocket full",
+  QUEUE_UNKNOWN: "Queue unknown",
+  INVALID_PATTERN: "Invalid pattern",
+};
 
-const timelineSteps = [
-  "Through Signal GREEN",
-  "LCD shows U-TURN WAIT",
-  "CdS-U1 detects vehicle",
-  "Compare CdS-U2 and CdS-T1",
-  "Classify U-turn demand",
-  "Request validated",
-  "Signal YELLOW",
-  "Signal RED",
-  "Ultrasonic C1 checks clearance",
-  "LCD shows U-TURN GO",
-  "Ultrasonic C2 monitors movement",
-  "LCD returns to WAIT",
-  "Conflict zone cleared",
-  "Through Signal GREEN",
-];
-
-const eventLog = [
-  { t: "08:47:12", event: "U-turn request validated", status: "ok" },
-  { t: "08:46:58", event: "CdS-U2 demand threshold exceeded", status: "warn" },
-  { t: "08:46:40", event: "Through signal cycled to GREEN", status: "ok" },
-  { t: "08:46:21", event: "Ultrasonic C1 clearance confirmed", status: "ok" },
-  { t: "08:45:59", event: "Conflict zone occupancy timeout", status: "error" },
-  { t: "08:45:33", event: "System mode set to AUTO", status: "ok" },
-];
-
-function StatusDot({ tone }) {
-  const map = {
-    green: "bg-emerald-400 shadow-[0_0_10px_2px_rgba(52,211,153,0.55)]",
-    amber: "bg-amber-400 shadow-[0_0_10px_2px_rgba(251,191,36,0.55)]",
-    red: "bg-red-400 shadow-[0_0_10px_2px_rgba(248,113,113,0.55)]",
-    blue: "bg-sky-400 shadow-[0_0_10px_2px_rgba(56,189,248,0.55)]",
-  };
-  return <span className={`inline-block h-2.5 w-2.5 rounded-full ${map[tone]}`} />;
+function formatSeconds(milliseconds) {
+  return `${(milliseconds / 1000).toFixed(1)} s`;
 }
 
 function Card({ children, className = "" }) {
   return (
-    <div className={`rounded-xl border border-[#1c2433] bg-[#10151f] shadow-[0_1px_0_rgba(255,255,255,0.02)_inset] ${className}`}>
+    <section className={`rounded-md border border-[#293034] bg-[#151a1c] ${className}`}>
       {children}
-    </div>
+    </section>
   );
 }
 
-function CardHeader({ icon: Icon, title, meta }) {
+function PanelHeader({ icon: Icon, title, meta }) {
   return (
-    <div className="flex items-center justify-between px-5 pt-4 pb-2">
+    <header className="flex min-h-11 items-center justify-between border-b border-[#293034] px-4">
       <div className="flex items-center gap-2">
-        {Icon && <Icon className="h-4 w-4 text-sky-400" strokeWidth={2} />}
-        <h3 className="text-[13px] font-medium tracking-wide text-slate-300 uppercase">{title}</h3>
+        <Icon className="h-4 w-4 text-[#63d6c5]" aria-hidden="true" />
+        <h2 className="text-sm font-semibold text-[#e7ece9]">{title}</h2>
       </div>
-      {meta && <span className="text-[11px] text-slate-500">{meta}</span>}
-    </div>
+      {meta && <span className="font-mono text-xs text-[#89928e]">{meta}</span>}
+    </header>
   );
 }
 
-function OverviewCard({ icon: Icon, label, value, tone, sub }) {
-  const toneText = {
-    green: "text-emerald-400", amber: "text-amber-400",
-    red: "text-red-400", blue: "text-sky-400", slate: "text-slate-200",
+function ConnectionBadge({ mode }) {
+  const config = {
+    LIVE: { icon: Wifi, label: "Live", classes: "border-emerald-700 bg-emerald-950 text-emerald-300" },
+    DEMO: { icon: Radio, label: "Demo", classes: "border-amber-700 bg-amber-950 text-amber-300" },
+    CONNECTING: { icon: Radio, label: "Connecting", classes: "border-[#5b6662] bg-[#1b2221] text-[#b2bbb7]" },
+    OFFLINE: { icon: WifiOff, label: "Offline", classes: "border-red-800 bg-red-950 text-red-300" },
+  }[mode];
+  const Icon = config.icon;
+
+  return (
+    <span className={`inline-flex h-8 items-center gap-2 rounded-md border px-3 text-xs font-semibold ${config.classes}`}>
+      <Icon className="h-3.5 w-3.5" aria-hidden="true" />
+      {config.label}
+    </span>
+  );
+}
+
+function Metric({ icon: Icon, label, value, detail, tone = "neutral" }) {
+  const tones = {
+    green: "text-emerald-300",
+    amber: "text-amber-300",
+    red: "text-red-300",
+    cyan: "text-[#63d6c5]",
+    neutral: "text-[#e7ece9]",
   };
+
   return (
-    <Card className="relative overflow-hidden p-5 transition-all hover:border-[#2a3547] hover:-translate-y-0.5">
-      <div className="absolute -right-6 -top-6 h-24 w-24 rounded-full bg-sky-500/5 blur-2xl" />
-      <div className="flex items-start justify-between">
-        <span className="text-[12px] font-medium uppercase tracking-wide text-slate-500">{label}</span>
-        <Icon className="h-4 w-4 text-slate-600" />
+    <Card className="min-h-28 p-4">
+      <div className="flex items-center justify-between text-[#89928e]">
+        <span className="text-xs font-medium">{label}</span>
+        <Icon className="h-4 w-4" aria-hidden="true" />
       </div>
-      <div className={`mt-3 flex items-baseline gap-2 text-2xl font-semibold ${toneText[tone]}`}>
-        {value}
-      </div>
-      {sub && <div className="mt-1 text-[11px] text-slate-500">{sub}</div>}
+      <div className={`mt-3 min-h-8 text-xl font-semibold ${tones[tone]}`}>{value}</div>
+      <div className="mt-1 min-h-4 text-xs text-[#89928e]">{detail}</div>
     </Card>
   );
 }
 
-function SensorCard({ s }) {
-  const tone = s.status === "active" ? "green" : "slate";
+function SignalLamp({ active, color }) {
+  const classes = {
+    RED: active ? "bg-red-500 shadow-[0_0_14px_rgba(239,68,68,0.7)]" : "bg-red-950",
+    YELLOW: active ? "bg-amber-400 shadow-[0_0_14px_rgba(251,191,36,0.7)]" : "bg-amber-950",
+    GREEN: active ? "bg-emerald-500 shadow-[0_0_14px_rgba(34,197,94,0.7)]" : "bg-emerald-950",
+  };
+  return <span className={`h-5 w-5 rounded-full border border-black/50 ${classes[color]}`} />;
+}
+
+function QueueVehicle({ x, y, color }) {
+  return <rect x={x} y={y} width="38" height="18" rx="3" fill={color} stroke="#e7ece9" strokeOpacity="0.25" />;
+}
+
+function IntersectionMap({ telemetry }) {
+  const qUturnValid = telemetry.sensors.q_uturn.valid;
+  const qMainValid = telemetry.sensors.q_main.valid;
+  const qUturn = qUturnValid ? Math.max(0, Math.min(3, telemetry.sensors.q_uturn.vehicles ?? 0)) : 0;
+  const qMain = qMainValid ? Math.max(0, Math.min(3, telemetry.sensors.q_main.vehicles ?? 0)) : 0;
+  const signal = telemetry.controller.signal;
+
   return (
-    <Card className="p-4 transition-colors hover:border-[#2a3547]">
-      <div className="flex items-center justify-between">
-        <span className="font-mono text-[13px] text-slate-200">{s.id}</span>
-        <StatusDot tone={s.status === "active" ? "green" : "amber"} />
-      </div>
-      <p className="mt-1 text-[11px] leading-tight text-slate-500">{s.label}</p>
-      <div className="mt-3 flex items-center justify-between">
-        <span className="font-mono text-lg text-slate-100">{s.value}</span>
-        <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide ${
-          s.status === "active" ? "bg-emerald-500/10 text-emerald-400" : "bg-slate-500/10 text-slate-400"
-        }`}>
-          {s.status}
-        </span>
+    <Card className="lg:col-span-8">
+      <PanelHeader icon={CircleGauge} title="Intersection state" meta={`controller ${telemetry.controller_time_ms} ms`} />
+      <div className="p-4">
+        <div className="relative aspect-[16/10] overflow-hidden rounded-md border border-[#293034] bg-[#0e1213] sm:aspect-[16/7]">
+          <svg viewBox="0 0 720 315" className="h-full w-full" role="img" aria-label="Current queue and signal state">
+            <rect width="720" height="315" fill="#0e1213" />
+            <defs>
+              <marker id="flowArrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M 0 0 L 10 5 L 0 10 z" fill="#aeb8b3" />
+              </marker>
+              <marker id="uturnArrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M 0 0 L 10 5 L 0 10 z" fill="#e8c45b" />
+              </marker>
+            </defs>
+
+            <rect x="0" y="48" width="720" height="84" fill="#292f31" />
+            <rect x="0" y="132" width="720" height="51" fill="#3d4541" />
+            <rect x="0" y="183" width="720" height="84" fill="#292f31" />
+            <rect x="250" y="132" width="60" height="51" fill="#292f31" />
+            <line x1="310" y1="48" x2="310" y2="132" stroke="#f2f5f3" strokeWidth="4" />
+            <line x1="310" y1="183" x2="310" y2="267" stroke="#f2f5f3" strokeWidth="4" />
+
+            <text x="18" y="70" fill="#aeb8b3" fontSize="13">Opposing main lane · one lane</text>
+            <text x="18" y="205" fill="#aeb8b3" fontSize="13">U-turn waiting queue · one lane</text>
+            <line x1="365" y1="91" x2="455" y2="91" stroke="#aeb8b3" strokeWidth="2" markerEnd="url(#flowArrow)" opacity="0.8" />
+            <line x1="670" y1="226" x2="580" y2="226" stroke="#aeb8b3" strokeWidth="2" markerEnd="url(#flowArrow)" opacity="0.8" />
+
+            <g transform="translate(326 52)">
+              <rect width="48" height="76" rx="5" fill="#111516" stroke="#505a56" />
+              <circle cx="24" cy="18" r="9" fill={signal === "RED" ? "#ef4444" : "#431719"} />
+              <circle cx="24" cy="38" r="9" fill={signal === "YELLOW" ? "#fbbf24" : "#453817"} />
+              <circle cx="24" cy="58" r="9" fill={signal === "GREEN" ? "#22c55e" : "#153c25"} />
+            </g>
+
+            <g>
+              <rect x="72" y="99" width="17" height="28" rx="3" fill="#63d6c5" />
+              <path d="M89 113 L300 113" stroke="#63d6c5" strokeDasharray="5 6" opacity="0.65" />
+              <text x="54" y="149" fill="#63d6c5" fontSize="12">Q_MAIN · {qMainValid ? `${qMain} veh` : "UNKNOWN"}</text>
+            </g>
+            {Array.from({ length: qMain }, (_, index) => (
+              <QueueVehicle key={`main-${index}`} x={266 - index * 43} y={101} color="#e8c45b" />
+            ))}
+
+            <g>
+              <rect x="520" y="233" width="17" height="28" rx="3" fill="#63d6c5" />
+              <path d="M520 247 L320 247" stroke="#63d6c5" strokeDasharray="5 6" opacity="0.65" />
+              <text x="472" y="288" fill="#63d6c5" fontSize="12">Q_UTURN · {qUturnValid ? `${qUturn} veh` : "UNKNOWN"}</text>
+            </g>
+            {Array.from({ length: qUturn }, (_, index) => (
+              <QueueVehicle key={`uturn-${index}`} x={318 + index * 43} y={238} color="#4db7d0" />
+            ))}
+
+            <circle cx="337" cy="260" r="7" fill={telemetry.sensors.u1.raw >= SENSOR_THRESHOLDS.u1 ? "#ef4444" : "#4b5551"} />
+            <circle cx="380" cy="260" r="7" fill={telemetry.sensors.u2.raw >= SENSOR_THRESHOLDS.u2 ? "#ef4444" : "#4b5551"} />
+            <text x="327" y="296" fill="#aeb8b3" fontSize="11">U1</text>
+            <text x="370" y="296" fill="#aeb8b3" fontSize="11">U2</text>
+            <path d="M318 247 C270 247 244 220 260 183 C270 157 300 142 344 116" fill="none" stroke="#e8c45b" strokeWidth="3" strokeDasharray="7 7" markerEnd="url(#uturnArrow)" />
+          </svg>
+        </div>
       </div>
     </Card>
   );
 }
 
-function ChartTooltip({ active, payload, label }) {
-  if (!active || !payload?.length) return null;
+function ControllerPanel({ telemetry }) {
+  const signal = telemetry.controller.signal;
   return (
-    <div className="rounded-lg border border-[#25304487] bg-[#0d1119] px-3 py-2 text-[11px] shadow-lg">
-      <p className="text-slate-400">{label}</p>
-      {payload.map((p, i) => (
-        <p key={i} className="font-mono text-sky-300">{p.value}</p>
-      ))}
+    <Card className="lg:col-span-4">
+      <PanelHeader icon={Cpu} title="Controller output" meta={telemetry.controller.policy} />
+      <div className="space-y-4 p-4">
+        <div className="flex items-center justify-between rounded-md border border-[#293034] bg-[#0f1314] p-4">
+          <div>
+            <div className="text-xs text-[#89928e]">Main signal</div>
+            <div className="mt-1 font-mono text-lg font-semibold text-[#e7ece9]">{signal}</div>
+          </div>
+          <div className="flex gap-2 rounded-md bg-black/40 p-2">
+            {(["RED", "YELLOW", "GREEN"]).map((color) => (
+              <SignalLamp key={color} color={color} active={signal === color} />
+            ))}
+          </div>
+        </div>
+
+        <div className="rounded-md border border-[#31554e] bg-[#0b1d19] p-4 text-center">
+          <div className="text-xs text-[#7ba69d]">16x2 LCD</div>
+          <div className="mt-2 font-mono text-lg font-semibold text-[#70e1c7]">{telemetry.controller.lcd.replaceAll("_", " ")}</div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div className="rounded-md border border-[#293034] bg-[#0f1314] p-3">
+            <div className="text-xs text-[#89928e]">Main extension</div>
+            <div className="mt-1 font-mono text-base text-[#e7ece9]">{formatSeconds(telemetry.controller.main_extension_ms)}</div>
+          </div>
+          <div className="rounded-md border border-[#293034] bg-[#0f1314] p-3">
+            <div className="text-xs text-[#89928e]">U-turn go</div>
+            <div className="mt-1 font-mono text-base text-[#e7ece9]">{formatSeconds(telemetry.controller.uturn_go_ms)}</div>
+          </div>
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+function SensorRow({ name, role, value, secondary, valid = true, occupied }) {
+  return (
+    <div className="grid min-h-16 grid-cols-[92px_1fr_auto] items-center gap-3 border-b border-[#252c2f] px-4 last:border-0">
+      <div className="font-mono text-sm font-semibold text-[#e7ece9]">{name}</div>
+      <div>
+        <div className="text-sm text-[#c2cac6]">{role}</div>
+        <div className="mt-0.5 text-xs text-[#79827e]">{secondary}</div>
+      </div>
+      <div className="text-right">
+        <div className={`font-mono text-base ${valid ? "text-[#63d6c5]" : "text-red-300"}`}>{value}</div>
+        {occupied !== undefined && (
+          <div className={`mt-0.5 text-xs ${occupied ? "text-amber-300" : "text-[#79827e]"}`}>{occupied ? "Occupied" : "Clear"}</div>
+        )}
+      </div>
     </div>
+  );
+}
+
+function FsmTimeline({ fsm, stateAgeMs }) {
+  const currentIndex = FSM_STEPS.indexOf(fsm);
+  return (
+    <Card>
+      <PanelHeader icon={ShieldCheck} title="Safety FSM" meta={`state age ${formatSeconds(stateAgeMs)}`} />
+      <div className="grid grid-cols-1 gap-2 p-4 sm:grid-cols-2 xl:grid-cols-6">
+        {FSM_STEPS.map((state, index) => {
+          const active = state === fsm;
+          const completed = currentIndex >= 0 && index < currentIndex;
+          return (
+            <div
+              key={state}
+              className={`min-h-20 rounded-md border p-3 ${active ? "border-[#63d6c5] bg-[#12302b]" : "border-[#293034] bg-[#0f1314]"}`}
+            >
+              <div className="flex items-center justify-between">
+                <span className="font-mono text-xs text-[#79827e]">{String(index + 1).padStart(2, "0")}</span>
+                {active ? <Activity className="h-4 w-4 text-[#63d6c5]" /> : completed ? <CheckCircle2 className="h-4 w-4 text-emerald-500" /> : null}
+              </div>
+              <div className={`mt-2 text-xs font-semibold ${active ? "text-[#86eadb]" : "text-[#aeb8b3]"}`}>{LABELS[state]}</div>
+            </div>
+          );
+        })}
+      </div>
+      {fsm === "FAULT_SAFE" && (
+        <div className="mx-4 mb-4 flex items-center gap-2 rounded-md border border-red-800 bg-red-950 p-3 text-sm text-red-200">
+          <AlertTriangle className="h-4 w-4" /> Controller is in fault-safe state
+        </div>
+      )}
+    </Card>
+  );
+}
+
+function QueueChart({ history }) {
+  return (
+    <Card className="lg:col-span-7">
+      <PanelHeader icon={ArrowDownUp} title="Queue history" meta="last 60 samples" />
+      <div className="h-64 p-3">
+        <Suspense fallback={<div className="flex h-full items-center justify-center text-sm text-[#79827e]">Loading queue history</div>}>
+          <QueueHistoryChart history={history} />
+        </Suspense>
+      </div>
+    </Card>
+  );
+}
+
+function EventLog({ events }) {
+  return (
+    <Card className="lg:col-span-5">
+      <PanelHeader icon={Clock3} title="State events" meta={`${events.length} retained`} />
+      <div className="max-h-64 overflow-auto">
+        {events.length === 0 ? (
+          <div className="p-6 text-center text-sm text-[#79827e]">No state transitions received</div>
+        ) : events.map((event) => (
+          <div key={event.id} className="grid grid-cols-[72px_1fr] gap-3 border-b border-[#252c2f] px-4 py-3 last:border-0">
+            <span className="font-mono text-xs text-[#79827e]">{event.time}</span>
+            <span className="text-sm text-[#cbd2cf]">{event.label}</span>
+          </div>
+        ))}
+      </div>
+    </Card>
   );
 }
 
 export default function TrafficDashboard() {
-  const [mode, setMode] = useState("AUTO");
-  const [currentStep] = useState(4); // "Classify U-turn demand" is active
-  const [sweep, setSweep] = useState(0);
-  const [clock, setClock] = useState(new Date());
-
-  useEffect(() => {
-    const i = setInterval(() => setSweep((s) => (s + 1) % 360), 40);
-    const c = setInterval(() => setClock(new Date()), 1000);
-    return () => { clearInterval(i); clearInterval(c); };
-  }, []);
+  const { telemetry, mode, history, events } = useSmartUturnTelemetry();
+  const qUturn = telemetry.sensors.q_uturn;
+  const qMain = telemetry.sensors.q_main;
+  const demand = telemetry.request.classification;
+  const demandTone = demand === "POCKET_FULL" || demand === "INVALID_PATTERN" ? "red" : demand === "NO_DEMAND" ? "neutral" : "amber";
+  const signalTone = telemetry.controller.signal === "GREEN" ? "green" : telemetry.controller.signal === "YELLOW" ? "amber" : "red";
 
   return (
-    <div className="min-h-screen w-full bg-[#0a0e16] text-slate-200" style={{ fontFamily: "Inter, system-ui, sans-serif" }}>
-      {/* background grid texture */}
-      <div className="pointer-events-none fixed inset-0 opacity-[0.035]" style={{
-        backgroundImage: "linear-gradient(#7dd3fc 1px, transparent 1px), linear-gradient(90deg, #7dd3fc 1px, transparent 1px)",
-        backgroundSize: "48px 48px",
-      }} />
-
-      {/* Top navigation */}
-      <header className="sticky top-0 z-20 border-b border-[#1c2433] bg-[#0a0e16]/90 backdrop-blur">
-        <div className="mx-auto flex max-w-[1400px] items-center justify-between px-6 py-4">
-          <div className="flex items-center gap-3">
-            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br from-sky-500 to-cyan-400 shadow-[0_0_16px_rgba(56,189,248,0.35)]">
-              <TrafficCone className="h-5 w-5 text-[#0a0e16]" strokeWidth={2.5} />
+    <div className="min-h-screen bg-[#0c1011] text-[#dce3df]">
+      <header className="sticky top-0 z-20 border-b border-[#293034] bg-[#0c1011]/95 backdrop-blur">
+        <div className="mx-auto flex min-h-16 max-w-[1480px] items-center justify-between gap-4 px-4 sm:px-6">
+          <div className="flex min-w-0 items-center gap-3">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-[#63d6c5] text-[#0c1011]">
+              <ArrowDownUp className="h-5 w-5" aria-hidden="true" />
             </div>
-            <div>
-              <h1 className="text-[15px] font-semibold tracking-tight text-slate-100">Smart U-Turn Traffic Control System</h1>
-              <p className="text-[11px] text-slate-500">Intersection Node · JL-014 · Live</p>
+            <div className="min-w-0">
+              <h1 className="truncate text-sm font-semibold text-[#f0f4f2] sm:text-base">Smart U-Turn Control Monitor</h1>
+              <p className="truncate text-xs text-[#79827e]">Indonesian left-hand traffic model · Node JL-014</p>
             </div>
           </div>
-          <div className="flex items-center gap-5">
-            <div className="hidden items-center gap-2 rounded-full border border-[#1c2433] bg-[#10151f] px-3 py-1.5 sm:flex">
-              <StatusDot tone="green" />
-              <span className="text-[11px] font-medium text-slate-400">System Online</span>
-            </div>
-            <span className="hidden font-mono text-[12px] text-slate-500 md:block">
-              {clock.toLocaleTimeString("en-GB")}
-            </span>
-            <Settings className="h-4 w-4 cursor-pointer text-slate-500 transition-colors hover:text-sky-400" />
-          </div>
+          <ConnectionBadge mode={mode} />
         </div>
       </header>
 
-      <main className="mx-auto max-w-[1400px] space-y-5 px-6 py-6">
+      <main className="mx-auto max-w-[1480px] space-y-4 px-4 py-4 sm:px-6 sm:py-6">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5">
+          <Metric icon={Lightbulb} label="Main signal" value={telemetry.controller.signal} detail={LABELS[telemetry.controller.fsm] ?? telemetry.controller.fsm} tone={signalTone} />
+          <Metric icon={ArrowDownUp} label="U-turn display" value={telemetry.controller.lcd.replaceAll("_", " ")} detail={`state ${formatSeconds(telemetry.controller.state_age_ms)}`} tone={telemetry.controller.lcd === "UTURN_GO" ? "green" : "amber"} />
+          <Metric icon={Car} label="Demand" value={LABELS[demand] ?? demand} detail={telemetry.request.latched ? `latched ${formatSeconds(telemetry.request.age_ms)}` : "not latched"} tone={demandTone} />
+          <Metric icon={Cpu} label="Timing policy" value={telemetry.controller.policy} detail={`${formatSeconds(telemetry.controller.main_extension_ms)} / ${formatSeconds(telemetry.controller.uturn_go_ms)}`} tone={telemetry.controller.policy === "ESP" ? "cyan" : "neutral"} />
+          <Metric icon={mode === "LIVE" ? Wifi : WifiOff} label="Telemetry" value={mode} detail={mode === "LIVE" ? "fresh USB serial data" : mode === "DEMO" ? "deterministic fixture" : "no fresh controller data"} tone={mode === "LIVE" ? "green" : mode === "DEMO" ? "amber" : "red"} />
+        </div>
 
-        {/* 1. Overview cards */}
-        <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <OverviewCard icon={Circle} label="Through Traffic Signal" value="GREEN" tone="green" sub="Cycle stable · 42s remaining" />
-          <OverviewCard icon={ArrowUpDown} label="U-Turn Status" value="WAIT" tone="amber" sub="Demand under evaluation" />
-          <OverviewCard icon={Car} label="Vehicle Count" value="187" tone="blue" sub="+12 in last 5 min" />
-          <OverviewCard icon={Cpu} label="System Mode" value={mode} tone={mode === "AUTO" ? "green" : "amber"} sub="Decision engine active" />
-        </section>
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
+          <IntersectionMap telemetry={telemetry} />
+          <ControllerPanel telemetry={telemetry} />
+        </div>
 
-        <section className="grid grid-cols-1 gap-5 lg:grid-cols-12">
-          {/* 2. Live intersection monitoring — signature panel */}
-          <Card className="lg:col-span-8">
-            <CardHeader icon={ScanLine} title="Live Intersection Monitoring" meta="Sensor overlay · scanning" />
-            <div className="relative mx-5 mb-5 aspect-[16/10] overflow-hidden rounded-lg border border-[#1c2433] bg-[#0b0f18]">
-              <div className="pointer-events-none absolute inset-0 opacity-[0.06]" style={{
-                backgroundImage: "linear-gradient(#7dd3fc 1px, transparent 1px), linear-gradient(90deg, #7dd3fc 1px, transparent 1px)",
-                backgroundSize: "28px 28px",
-              }} />
-              <svg viewBox="0 0 400 250" className="absolute inset-0 h-full w-full">
-                {/* road base */}
-                <rect x="0" y="95" width="400" height="60" fill="#141a26" />
-                <rect x="170" y="0" width="60" height="250" fill="#141a26" />
-                {/* lane markings */}
-                <line x1="0" y1="125" x2="400" y2="125" stroke="#2a3547" strokeWidth="1.5" strokeDasharray="8 8" />
-                <line x1="200" y1="0" x2="200" y2="250" stroke="#2a3547" strokeWidth="1.5" strokeDasharray="8 8" />
-                {/* u-turn lane arc */}
-                <path d="M 170 140 A 30 30 0 0 0 170 110" fill="none" stroke="#f59e0b" strokeWidth="2" strokeDasharray="5 4" opacity="0.7" />
-                {/* radar sweep, rotating around intersection center */}
-                <g transform={`rotate(${sweep} 200 125)`} opacity="0.5">
-                  <path d="M 200 125 L 200 55 A 70 70 0 0 1 249.5 75.5 Z" fill="url(#sweepGrad)" />
-                </g>
-                <defs>
-                  <radialGradient id="sweepGrad" cx="0" cy="1" r="1">
-                    <stop offset="0%" stopColor="#22d3ee" stopOpacity="0.5" />
-                    <stop offset="100%" stopColor="#22d3ee" stopOpacity="0" />
-                  </radialGradient>
-                </defs>
-                {/* traffic light */}
-                <g transform="translate(206,60)">
-                  <rect x="0" y="0" width="14" height="34" rx="3" fill="#1c2433" stroke="#2a3547" />
-                  <circle cx="7" cy="8" r="3.2" fill="#ef4444" opacity="0.25" />
-                  <circle cx="7" cy="17" r="3.2" fill="#f59e0b" opacity="0.25" />
-                  <circle cx="7" cy="26" r="3.2" fill="#22c55e">
-                    <animate attributeName="opacity" values="1;0.4;1" dur="2s" repeatCount="indefinite" />
-                  </circle>
-                </g>
-                {/* vehicles */}
-                <g>
-                  <rect x="60" y="103" width="18" height="9" rx="2" fill="#38bdf8">
-                    <animate attributeName="x" values="40;150;40" dur="6s" repeatCount="indefinite" />
-                  </rect>
-                  <rect x="300" y="134" width="18" height="9" rx="2" fill="#38bdf8">
-                    <animate attributeName="x" values="330;230;330" dur="7s" repeatCount="indefinite" />
-                  </rect>
-                  <rect x="182" y="150" width="9" height="18" rx="2" fill="#f59e0b" />
-                </g>
-                {/* sensor pulse points */}
-                {[[178, 148, "#22c55e"], [222, 148, "#22c55e"], [222, 100, "#f59e0b"], [130, 118, "#38bdf8"], [270, 132, "#38bdf8"]].map(([cx, cy, c], i) => (
-                  <g key={i}>
-                    <circle cx={cx} cy={cy} r="3" fill={c} />
-                    <circle cx={cx} cy={cy} r="3" fill={c} opacity="0.6">
-                      <animate attributeName="r" values="3;12;3" dur="2.4s" begin={`${i * 0.4}s`} repeatCount="indefinite" />
-                      <animate attributeName="opacity" values="0.6;0;0.6" dur="2.4s" begin={`${i * 0.4}s`} repeatCount="indefinite" />
-                    </circle>
-                  </g>
-                ))}
-              </svg>
-              <div className="absolute bottom-3 left-3 flex items-center gap-1.5 rounded-md bg-[#0a0e16]/80 px-2 py-1 text-[10px] text-slate-500 backdrop-blur">
-                <Radio className="h-3 w-3 text-cyan-400" /> live feed placeholder — WebSocket ready
-              </div>
-            </div>
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+          <Card>
+            <PanelHeader icon={Radio} title="Sensor observations" meta="Arduino inputs" />
+            <SensorRow name="U1" role="First stopped U-turn vehicle" value={telemetry.sensors.u1.raw} secondary={`occupied threshold ${SENSOR_THRESHOLDS.u1}`} occupied={telemetry.sensors.u1.raw >= SENSOR_THRESHOLDS.u1} />
+            <SensorRow name="U2" role="Second vehicle / pocket occupancy" value={telemetry.sensors.u2.raw} secondary={`occupied threshold ${SENSOR_THRESHOLDS.u2}`} occupied={telemetry.sensors.u2.raw >= SENSOR_THRESHOLDS.u2} />
           </Card>
-
-          {/* 3. LCD display */}
-          <Card className="flex flex-col lg:col-span-4">
-            <CardHeader icon={Zap} title="LCD Display" meta="16×2" />
-            <div className="mx-5 mb-5 flex flex-1 flex-col items-center justify-center rounded-lg border border-[#0f2a1c] bg-[#08150e] p-6">
-              <div className="w-full rounded-md border border-[#123a25] bg-[#0b1f14] p-4 shadow-[inset_0_0_20px_rgba(0,0,0,0.5)]">
-                <p className="text-center font-mono text-[19px] tracking-[0.15em] text-[#5eead4]" style={{ fontFamily: "'JetBrains Mono', monospace", textShadow: "0 0 8px rgba(94,234,212,0.6)" }}>
-                  U-TURN&nbsp;WAIT
-                </p>
-                <p className="mt-1 text-center font-mono text-[11px] tracking-[0.2em] text-[#2f6e58]">
-                  DEMAND: EVALUATING
-                </p>
-              </div>
-              <p className="mt-3 text-[10px] uppercase tracking-wide text-slate-600">character LCD emulation</p>
-            </div>
+          <Card>
+            <PanelHeader icon={Car} title="Queue estimates" meta="3 s stabilized" />
+            <SensorRow name="Q_UTURN" role="Dedicated U-turn pocket" value={qUturn.valid ? `${qUturn.vehicles} veh` : "UNKNOWN"} secondary={`${qUturn.distance_cm} cm · capacity 3`} valid={qUturn.valid} />
+            <SensorRow name="Q_MAIN" role="Opposing main stop-line queue" value={qMain.valid ? `${qMain.vehicles} veh` : "UNKNOWN"} secondary={`${qMain.distance_cm} cm · reference 17 cm`} valid={qMain.valid} />
           </Card>
-        </section>
+        </div>
 
-        {/* 4. Sensor monitoring */}
-        <section>
-          <div className="mb-2 flex items-center gap-2 px-1">
-            <Gauge className="h-4 w-4 text-sky-400" />
-            <h2 className="text-[13px] font-medium uppercase tracking-wide text-slate-300">Sensor Monitoring</h2>
-          </div>
-          <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
-            {sensors.map((s) => <SensorCard key={s.id} s={s} />)}
-          </div>
-        </section>
+        <FsmTimeline fsm={telemetry.controller.fsm} stateAgeMs={telemetry.controller.state_age_ms} />
 
-        {/* 5. Traffic analysis */}
-        <section className="grid grid-cols-1 gap-5 lg:grid-cols-12">
-          <Card className="lg:col-span-4">
-            <CardHeader icon={BarChart3} title="Traffic Analysis" />
-            <div className="grid grid-cols-2 gap-3 px-5 pb-5">
-              {[
-                { label: "Vehicle Count", value: "187", icon: Car },
-                { label: "U-turn Requests", value: "34", icon: ArrowUpDown },
-                { label: "Avg Wait Time", value: "26s", icon: Timer },
-                { label: "Traffic Density", value: "Med", icon: TrendingUp },
-              ].map((m, i) => (
-                <div key={i} className="rounded-lg border border-[#1c2433] bg-[#0d1119] p-3">
-                  <m.icon className="h-3.5 w-3.5 text-slate-600" />
-                  <p className="mt-2 text-lg font-semibold text-slate-100">{m.value}</p>
-                  <p className="text-[10px] uppercase tracking-wide text-slate-500">{m.label}</p>
-                </div>
-              ))}
-            </div>
-          </Card>
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
+          <QueueChart history={history} />
+          <EventLog events={events} />
+        </div>
 
-          <Card className="lg:col-span-4">
-            <CardHeader icon={TrendingUp} title="Vehicle Count Over Time" />
-            <div className="h-[190px] px-3 pb-4">
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={vehicleCountSeries} margin={{ top: 5, right: 10, left: -20, bottom: 0 }}>
-                  <CartesianGrid stroke="#1c2433" vertical={false} />
-                  <XAxis dataKey="t" tick={{ fill: "#64748b", fontSize: 10 }} axisLine={{ stroke: "#1c2433" }} tickLine={false} />
-                  <YAxis tick={{ fill: "#64748b", fontSize: 10 }} axisLine={false} tickLine={false} />
-                  <Tooltip content={<ChartTooltip />} />
-                  <Line type="monotone" dataKey="vehicles" stroke="#38bdf8" strokeWidth={2} dot={false} activeDot={{ r: 4, fill: "#22d3ee" }} />
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
-          </Card>
-
-          <Card className="lg:col-span-4">
-            <CardHeader icon={BarChart3} title="Traffic Density" />
-            <div className="h-[190px] px-3 pb-4">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={densitySeries} margin={{ top: 5, right: 10, left: -20, bottom: 0 }}>
-                  <CartesianGrid stroke="#1c2433" vertical={false} />
-                  <XAxis dataKey="lane" tick={{ fill: "#64748b", fontSize: 9 }} axisLine={{ stroke: "#1c2433" }} tickLine={false} />
-                  <YAxis tick={{ fill: "#64748b", fontSize: 10 }} axisLine={false} tickLine={false} />
-                  <Tooltip content={<ChartTooltip />} />
-                  <Bar dataKey="density" fill="#3b82f6" radius={[4, 4, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          </Card>
-        </section>
-
-        {/* 6. Decision engine + 7. Control flow timeline */}
-        <section className="grid grid-cols-1 gap-5 lg:grid-cols-12">
-          <Card className="lg:col-span-5 border-sky-500/20 bg-gradient-to-b from-[#0f1b2e] to-[#10151f]">
-            <CardHeader icon={Cpu} title="Decision Engine" meta="rule-based" />
-            <div className="px-5 pb-5">
-              <div className="space-y-2 rounded-lg border border-[#1c2433] bg-[#0a0e16] p-4 font-mono text-[13px]">
-                <div className="flex items-center justify-between text-slate-400">
-                  <span>CdS-U2</span><span className="text-sky-300">18</span>
-                </div>
-                <div className="flex items-center justify-between text-slate-400">
-                  <span>CdS-T1</span><span className="text-slate-500">7</span>
-                </div>
-              </div>
-              <div className="mt-3 flex items-center justify-between rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-4 py-3">
-                <div>
-                  <p className="text-[10px] uppercase tracking-wide text-emerald-400/80">Decision</p>
-                  <p className="text-[15px] font-semibold text-emerald-300">Priority → U-Turn</p>
-                </div>
-                <CheckCircle2 className="h-5 w-5 text-emerald-400" />
-              </div>
-            </div>
-          </Card>
-
-          <Card className="lg:col-span-7">
-            <CardHeader icon={ChevronRight} title="Control Flow Timeline" meta={`step ${currentStep + 1} / ${timelineSteps.length}`} />
-            <div className="max-h-[280px] overflow-y-auto px-5 pb-5">
-              <ol className="relative ml-3 space-y-0 border-l border-[#1c2433]">
-                {timelineSteps.map((step, i) => {
-                  const state = i < currentStep ? "done" : i === currentStep ? "active" : "pending";
-                  const dotColor = state === "done" ? "bg-emerald-400" : state === "active" ? "bg-sky-400" : "bg-slate-600";
-                  const textColor = state === "done" ? "text-emerald-400" : state === "active" ? "text-sky-300 font-medium" : "text-slate-500";
-                  return (
-                    <li key={i} className="relative py-2 pl-6">
-                      <span className={`absolute -left-[5px] top-3.5 h-2.5 w-2.5 rounded-full ${dotColor} ${state === "active" ? "shadow-[0_0_10px_2px_rgba(56,189,248,0.6)]" : ""}`} />
-                      <span className={`text-[12.5px] ${textColor}`}>{step}</span>
-                    </li>
-                  );
-                })}
-              </ol>
-            </div>
-          </Card>
-        </section>
-
-        {/* 8. Event logs */}
-        <Card>
-          <CardHeader icon={Activity} title="Event Logs" meta="last 6 events" />
-          <div className="overflow-x-auto px-5 pb-5">
-            <table className="w-full text-left text-[12.5px]">
-              <thead>
-                <tr className="border-b border-[#1c2433] text-[10px] uppercase tracking-wide text-slate-500">
-                  <th className="pb-2 font-medium">Timestamp</th>
-                  <th className="pb-2 font-medium">Event</th>
-                  <th className="pb-2 font-medium">Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {eventLog.map((e, i) => (
-                  <tr key={i} className="border-b border-[#151b27] last:border-0">
-                    <td className="py-2.5 font-mono text-slate-500">{e.t}</td>
-                    <td className="py-2.5 text-slate-300">{e.event}</td>
-                    <td className="py-2.5">
-                      <span className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[10px] font-medium uppercase ${
-                        e.status === "ok" ? "bg-emerald-500/10 text-emerald-400"
-                        : e.status === "warn" ? "bg-amber-500/10 text-amber-400"
-                        : "bg-red-500/10 text-red-400"
-                      }`}>
-                        {e.status === "ok" ? <CheckCircle2 className="h-3 w-3" /> : <AlertTriangle className="h-3 w-3" />}
-                        {e.status}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </Card>
-
-        {/* 9. Manual control panel */}
-        <Card>
-          <CardHeader icon={Power} title="Manual Control Panel" meta="future functionality — disabled" />
-          <div className="flex flex-col gap-4 px-5 pb-5 sm:flex-row sm:items-center sm:justify-between">
-            <div className="flex flex-wrap gap-2">
-              {[
-                { label: "Green", tone: "border-emerald-500/30 text-emerald-400" },
-                { label: "Yellow", tone: "border-amber-500/30 text-amber-400" },
-                { label: "Red", tone: "border-red-500/30 text-red-400" },
-                { label: "Open U-Turn", tone: "border-sky-500/30 text-sky-400" },
-                { label: "Close U-Turn", tone: "border-sky-500/30 text-sky-400" },
-              ].map((b) => (
-                <button key={b.label} disabled className={`cursor-not-allowed rounded-lg border bg-[#0d1119] px-3.5 py-2 text-[12px] font-medium opacity-50 ${b.tone}`}>
-                  {b.label}
-                </button>
-              ))}
-              <button disabled className="flex cursor-not-allowed items-center gap-1.5 rounded-lg border border-[#2a3547] bg-[#0d1119] px-3.5 py-2 text-[12px] font-medium text-slate-400 opacity-50">
-                <RotateCcw className="h-3.5 w-3.5" /> Reset System
-              </button>
-            </div>
-
-            <div className="flex items-center gap-3 rounded-lg border border-[#1c2433] bg-[#0d1119] px-4 py-2.5">
-              <span className={`text-[11px] font-medium ${mode === "MANUAL" ? "text-amber-400" : "text-slate-500"}`}>MANUAL</span>
-              <button
-                onClick={() => setMode((m) => (m === "AUTO" ? "MANUAL" : "AUTO"))}
-                className={`relative h-6 w-11 rounded-full transition-colors ${mode === "AUTO" ? "bg-emerald-500/80" : "bg-amber-500/80"}`}
-              >
-                <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white transition-transform ${mode === "AUTO" ? "translate-x-[22px]" : "translate-x-0.5"}`} />
-              </button>
-              <span className={`text-[11px] font-medium ${mode === "AUTO" ? "text-emerald-400" : "text-slate-500"}`}>AUTO</span>
-            </div>
-          </div>
-        </Card>
-
-        <footer className="py-4 text-center text-[11px] text-slate-600">
-          Smart U-Turn Traffic Control System · dummy data shown · ready for WebSocket / REST integration
-        </footer>
+        <div className="flex flex-col justify-between gap-2 border-t border-[#293034] py-3 text-xs text-[#68716d] sm:flex-row">
+          <span>Safety transitions remain owned by Arduino Uno</span>
+          <span className="font-mono">schema v{telemetry.schema_version} · {telemetry.source}</span>
+        </div>
       </main>
     </div>
   );

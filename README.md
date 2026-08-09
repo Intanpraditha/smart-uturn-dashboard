@@ -1,16 +1,20 @@
-# React + Vite
+# Smart U-Turn Dashboard
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+Read-only React dashboard for the queue-centric Smart U-Turn controller. It displays U1/U2 occupancy, Q_UTURN/Q_MAIN estimates, demand classification, the fixed safety FSM, LCD output, and LOCAL/ESP timing policy.
 
-Currently, two official plugins are available:
+## Run
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+```bash
+npm install
+npm run dev
+```
 
-## React Compiler
+The dashboard connects to `ws://127.0.0.1:8765` by default. Override it with:
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+```text
+VITE_SMART_UTURN_WS_URL=ws://host:port
+```
 
-## Expanding the Oxlint configuration
+Use `http://localhost:5173/?demo=1` for deterministic hardware-free display testing. Demo mode is always labeled and is never presented as live controller data.
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and Oxlint's TypeScript related rules in your project.
+The local Python serial gateway lives in the main `smart-uturn` repository at `tools/dashboard_gateway`. The dashboard has no command channel and cannot change signals, FSM states, or timing.
