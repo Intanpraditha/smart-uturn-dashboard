@@ -85,7 +85,8 @@ export function useSmartUturnTelemetry() {
         try {
           const next = JSON.parse(event.data);
           if (isTelemetry(next)) {
-            accept(next, next.connected ? "LIVE" : "OFFLINE");
+            const received = { ...next, received_at_ms: Date.now() };
+            accept(received, received.connected ? "LIVE" : "OFFLINE");
           }
         } catch {
           // Malformed payloads do not replace the last known good state.

@@ -29,6 +29,15 @@ const FSM_STEPS = [
 ];
 
 const SENSOR_THRESHOLDS = { u1: 350, u2: 300 };
+const EMPTY_OPTIMIZER = {
+  mode: "NOT_AVAILABLE",
+  completed_cycles: 0,
+  last_reward: 0,
+  selected_main_ms: 5000,
+  selected_uturn_ms: 4000,
+  online_action: false,
+  storage_ready: false,
+};
 
 const LABELS = {
   MAIN_GREEN: "Main green",
@@ -196,6 +205,7 @@ function IntersectionMap({ telemetry }) {
 
 function ControllerPanel({ telemetry }) {
   const signal = telemetry.controller.signal;
+  const optimizer = telemetry.optimizer ?? EMPTY_OPTIMIZER;
   return (
     <Card className="lg:col-span-4">
       <PanelHeader icon={Cpu} title="Controller output" meta={telemetry.controller.policy} />
@@ -225,6 +235,27 @@ function ControllerPanel({ telemetry }) {
           <div className="rounded-md border border-[#293034] bg-[#0f1314] p-3">
             <div className="text-xs text-[#89928e]">U-turn go</div>
             <div className="mt-1 font-mono text-base text-[#e7ece9]">{formatSeconds(telemetry.controller.uturn_go_ms)}</div>
+          </div>
+        </div>
+
+        <div className="border-t border-[#293034] pt-4">
+          <div className="flex items-center justify-between gap-3">
+            <div className="text-xs text-[#89928e]">Online optimizer</div>
+            <div className="break-all text-right font-mono text-xs text-[#63d6c5]">{optimizer.mode}</div>
+          </div>
+          <div className="mt-3 grid grid-cols-2 gap-3 text-xs">
+            <div>
+              <div className="text-[#79827e]">Completed cycles</div>
+              <div className="mt-1 font-mono text-[#e7ece9]">{optimizer.completed_cycles}</div>
+            </div>
+            <div>
+              <div className="text-[#79827e]">Last reward</div>
+              <div className="mt-1 font-mono text-[#e7ece9]">{optimizer.last_reward}</div>
+            </div>
+          </div>
+          <div className="mt-3 text-xs text-[#79827e]">
+            Proposed {formatSeconds(optimizer.selected_main_ms)} / {formatSeconds(optimizer.selected_uturn_ms)}
+            {optimizer.online_action ? " - learned action" : " - baseline action"}
           </div>
         </div>
       </div>
@@ -320,6 +351,7 @@ export default function TrafficDashboard() {
   const demand = telemetry.request.classification;
   const demandTone = demand === "POCKET_FULL" || demand === "INVALID_PATTERN" ? "red" : demand === "NO_DEMAND" ? "neutral" : "amber";
   const signalTone = telemetry.controller.signal === "GREEN" ? "green" : telemetry.controller.signal === "YELLOW" ? "amber" : "red";
+  const optimizer = telemetry.optimizer ?? EMPTY_OPTIMIZER;
 
   return (
     <div className="min-h-screen bg-[#0c1011] text-[#dce3df]">
@@ -343,8 +375,8 @@ export default function TrafficDashboard() {
           <Metric icon={Lightbulb} label="Main signal" value={telemetry.controller.signal} detail={LABELS[telemetry.controller.fsm] ?? telemetry.controller.fsm} tone={signalTone} />
           <Metric icon={ArrowDownUp} label="U-turn display" value={telemetry.controller.lcd.replaceAll("_", " ")} detail={`state ${formatSeconds(telemetry.controller.state_age_ms)}`} tone={telemetry.controller.lcd === "UTURN_GO" ? "green" : "amber"} />
           <Metric icon={Car} label="Demand" value={LABELS[demand] ?? demand} detail={telemetry.request.latched ? `latched ${formatSeconds(telemetry.request.age_ms)}` : "not latched"} tone={demandTone} />
-          <Metric icon={Cpu} label="Timing policy" value={telemetry.controller.policy} detail={`${formatSeconds(telemetry.controller.main_extension_ms)} / ${formatSeconds(telemetry.controller.uturn_go_ms)}`} tone={telemetry.controller.policy === "ESP" ? "cyan" : "neutral"} />
-          <Metric icon={mode === "LIVE" ? Wifi : WifiOff} label="Telemetry" value={mode} detail={mode === "LIVE" ? "fresh USB serial data" : mode === "DEMO" ? "deterministic fixture" : "no fresh controller data"} tone={mode === "LIVE" ? "green" : mode === "DEMO" ? "amber" : "red"} />
+          <Metric icon={Cpu} label="Timing policy" value={telemetry.controller.policy} detail={optimizer.mode === "NOT_AVAILABLE" ? `${formatSeconds(telemetry.controller.main_extension_ms)} / ${formatSeconds(telemetry.controller.uturn_go_ms)}` : optimizer.mode} tone={telemetry.controller.policy === "ESP" ? "cyan" : "neutral"} />
+          <Metric icon={mode === "LIVE" ? Wifi : WifiOff} label="Telemetry" value={mode} detail={mode === "LIVE" ? `fresh ${telemetry.source} data` : mode === "DEMO" ? "deterministic fixture" : "no fresh controller data"} tone={mode === "LIVE" ? "green" : mode === "DEMO" ? "amber" : "red"} />
         </div>
 
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">

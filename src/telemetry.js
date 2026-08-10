@@ -25,6 +25,15 @@ const EMPTY_TELEMETRY = {
     uturn_go_ms: 4000,
     state_age_ms: 0,
   },
+  optimizer: {
+    mode: "NOT_AVAILABLE",
+    completed_cycles: 0,
+    last_reward: 0,
+    selected_main_ms: 5000,
+    selected_uturn_ms: 4000,
+    online_action: false,
+    storage_ready: false,
+  },
 };
 
 const DEMO_STATES = [
@@ -81,6 +90,15 @@ export function createDemoTelemetry(now = Date.now()) {
       main_extension_ms: 5000,
       uturn_go_ms: 4000,
       state_age_ms: offset,
+    },
+    optimizer: {
+      mode: "SHADOW_LEARNING",
+      completed_cycles: Math.floor((now % 3600000) / DEMO_CYCLE_MS),
+      last_reward: -21,
+      selected_main_ms: 5000,
+      selected_uturn_ms: 4000,
+      online_action: false,
+      storage_ready: true,
     },
   };
 }
